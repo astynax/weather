@@ -25,27 +25,16 @@ import qualified Text.XML                  as X
 import           Text.XML.Lens             (attr, el, named, root, (./), (^?))
 
 
+import           Data.Weather
+
+
 {------------ Domain ---------------}
-type CityID = String
-
-data TempUnits = Celsiuses
-               | Farenheits
-
-data Weather = Weather
-             { getCity    :: Text
-             , getCountry :: Text
-             , getTemp    :: Text
-             , getUnits   :: TempUnits
-             , getDate    :: Text
-             , getText    :: Text }
-
-data Config = Config
-            { cityID    :: Maybe CityID
-            , tempUnits :: TempUnits
-            , proxy     :: Maybe Proxy }
 
 type Url = String
 
+data Options = Options { getConfig   :: Config
+                       , getProvider :: String
+                       , getProxy    :: Maybe Proxy }
 
 {------------- Main function ----------------}
 main :: IO ()
@@ -53,7 +42,7 @@ main = cli >>= doSomeWork >>= exitWith
 
 
 {---------------- Options ------------------}
-cli :: IO Config
+cli :: IO Options
 cli = execParser
     $ info (helper <*> opts)
       (fullDesc
@@ -61,18 +50,20 @@ cli = execParser
     <> header "weather - Yahoo Weather displaying tool")
 
 
-opts :: Parser Config
-opts = Config
-  <$> optional (strOption
-      (long "city"
-    <> short 'c'
-    <> metavar "CITY"
-    <> help "Yahoo weather API's city ID"))
+opts :: Parser Options
+opts = Options
+  <$> (Config
+       <$> optional
+       (strOption
+        (long "city"
+         <> short 'c'
+         <> metavar "CITY"
+         <> help "Yahoo weather API's city ID"))
 
-  <*> flag Celsiuses Farenheits
-      (long "farenheits"
-    <> short 'F'
-    <> help "Show temperature in Farenheits (default: Celsiuses)")
+       <*> flag Celsiuses Farenheits
+       (long "farenheits"
+        <> short 'F'
+        <> help "Show temperature in Farenheits (default: Celsiuses)"))
 
   <*> optional (option extractProxy
       (long "proxy"
