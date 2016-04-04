@@ -3,7 +3,7 @@
 module Main where
 
 
-import           Control.Applicative       (optional, (<$>), (<*>))
+import           Control.Applicative       (optional)
 import           Control.Monad             (liftM)
 import           Data.Default              (def)
 import           Data.Maybe                (fromMaybe)
@@ -32,9 +32,11 @@ import           Data.Weather
 
 type Url = String
 
-data Options = Options { getConfig   :: Config
-                       , getProvider :: String
-                       , getProxy    :: Maybe Proxy }
+data Options =
+  Options
+  { getConfig :: Config
+  , getProxy :: Maybe Proxy
+  }
 
 {------------- Main function ----------------}
 main :: IO ()
@@ -43,59 +45,71 @@ main = cli >>= doSomeWork >>= exitWith
 
 {---------------- Options ------------------}
 cli :: IO Options
-cli = execParser
-    $ info (helper <*> opts)
-      (fullDesc
+cli =
+  execParser
+  $ info (helper <*> opts)
+  ( fullDesc
     <> progDesc "Print current weather for CITY"
-    <> header "weather - Yahoo Weather displaying tool")
+    <> header "weather - Yahoo Weather displaying tool"
+  )
 
 
 opts :: Parser Options
-opts = Options
-  <$> (Config
-       <$> optional
-       (strOption
-        (long "city"
-         <> short 'c'
-         <> metavar "CITY"
-         <> help "Yahoo weather API's city ID"))
+opts =
+  Options
+  <$> ( Config
+        <$> optional
+        ( strOption
+          ( long "city"
+            <> short 'c'
+            <> metavar "CITY"
+            <> help "Yahoo weather API's city ID"))
 
-       <*> flag Celsiuses Farenheits
-       (long "farenheits"
-        <> short 'F'
-        <> help "Show temperature in Farenheits (default: Celsiuses)"))
+        <*> optional
+        ( flag Celsiuses Farenheits
+          ( long "farenheits"
+            <> short 'F'
+            <> help "Show temperature in Farenheits (default: Celsiuses)"
+          )
+        )
+      )
 
-  <*> optional (option extractProxy
-      (long "proxy"
-    <> short 'p'
-    <> help "Proxy server in format [user:pass@]host[:port]"))
+  <*> optional
+  ( option extractProxy
+    ( long "proxy"
+      <> short 'p'
+      <> help "Proxy server in format [user:pass@]host[:port]"
+    )
+  )
 
   where
-    extractProxy = readerAsk
-               >>= maybe (readerError "Wrong proxy string! (see --help)") return
-                 . parseProxy
+    extractProxy =
+      readerAsk
+      >>= maybe (readerError "Wrong proxy string! (see --help)") return
+      . parseProxy
 
 
 {------------------ Misc stuff --------------------------}
 
 renderWeather :: Weather -> String
 renderWeather w =
-  concat [ unpack (getDate w), ": "
-         , unpack (getCity w)
-         , "(", unpack (getCountry w), "), "
-         , unpack (getTemp w)
-         , case getUnits w of
-              Celsiuses  -> "°C"
-              Farenheits -> "°F"
-         , ", "
-         , unpack (getText w)]
+  concat
+  [ unpack (getCity w)
+  , unpack (getTemp w)
+  , case getUnits w of
+    Celsiuses  -> "°C"
+    Farenheits -> "°F"
+  , ", "
+  , unpack (getText w)
+  ]
 
 
 mkAPIUrl :: CityID -> TempUnits -> Url
 mkAPIUrl city units =
-  let unitStr = case units of
-                  Celsiuses  -> "c"
-                  Farenheits -> "f"
+  let
+    unitStr = case units of
+      Celsiuses  -> "c"
+      Farenheits -> "f"
   in "http://weather.yahooapis.com/forecastrss?w=" ++ city ++ "&u=" ++ unitStr
 
 
@@ -104,12 +118,10 @@ getWeather doc =
   do feed      <- doc ^? root . el "rss" ./ el "channel"
      units     <- feed ^? el "channel" ./ named "units" . attr "temperature"
      city      <- feed ^? el "channel" ./ named "location" . attr "city"
-     country   <- feed ^? el "channel" ./ named "location" . attr "country"
      condition <- feed ^? el "channel" ./ el "item" ./ named "condition"
-     Weather city country
+     Weather city
          <$> condition ^? attr "temp"
          <*> toTempUnit units
-         <*> condition ^? attr "date"
          <*> condition ^? attr "text"
   where
     toTempUnit :: Text -> Maybe TempUnits
@@ -139,13 +151,14 @@ parseDocument s =
     _       -> Nothing
 
 
-doSomeWork :: Config -> IO ExitCode
-doSomeWork cfg = do
+doSomeWork :: Options -> IO ExitCode
+doSomeWork o = do
+  let cfg = getConfig o
   resp <- simpleRequest
-    (proxy cfg)
+    (getProxy o)
     (mkAPIUrl (fromMaybe "2121267" -- default city is Kazan'
                          (cityID cfg))
-              (tempUnits cfg))
+              (fromMaybe Celsiuses (tempUnits cfg)))
   let weather = resp >>= parseDocument >>= getWeather
   maybe (return $ ExitFailure 1)
         ((>> return ExitSuccess) . putStrLn . renderWeather)
