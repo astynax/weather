@@ -1,18 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Main where
 
 
 import           Control.Applicative       (optional)
-import           Control.Monad             (liftM)
+import           Control.Monad.Except
 import           Data.Default              (def)
 import           Data.Maybe                (fromMaybe)
 import           Data.Text                 (Text, unpack)
 import qualified Data.Text.Lazy            as T
 import           Network.Browser           (browse, request, setOutHandler,
                                             setProxy)
-import           Network.HTTP              (Response (rspBody), catchIO,
-                                            getRequest)
+import           Network.HTTP              (Response(rspBody), getRequest)
 import           Network.HTTP.Proxy        (Proxy, fetchProxy, parseProxy)
 import           Options.Applicative       (Parser, execParser, flag, fullDesc,
                                             header, help, helper, info, long,
@@ -113,25 +113,29 @@ mkAPIUrl city units =
   in "http://weather.yahooapis.com/forecastrss?w=" ++ city ++ "&u=" ++ unitStr
 
 
-getWeather :: Document -> Maybe Weather
+getWeather :: Monad m => Document -> ExceptT String m Weather
 getWeather doc =
-  do feed      <- doc ^? root . el "rss" ./ el "channel"
-     units     <- feed ^? el "channel" ./ named "units" . attr "temperature"
-     city      <- feed ^? el "channel" ./ named "location" . attr "city"
-     condition <- feed ^? el "channel" ./ el "item" ./ named "condition"
-     Weather city
-         <$> condition ^? attr "temp"
-         <*> toTempUnit units
-         <*> condition ^? attr "text"
+  let
+    weather = do
+      feed      <- doc ^? root . el "rss" ./ el "channel"
+      units     <- feed ^? el "channel" ./ named "units" . attr "temperature"
+      city      <- feed ^? el "channel" ./ named "location" . attr "city"
+      condition <- feed ^? el "channel" ./ el "item" ./ named "condition"
+
+      Weather city
+        <$> condition ^? attr "temp"
+        <*> toTempUnit units
+        <*> condition ^? attr "text"
+  in
+    maybe (fail "Bad response!") return weather
   where
     toTempUnit :: Text -> Maybe TempUnits
     toTempUnit = flip lookup [("C", Celsiuses), ("F", Farenheits)]
 
 
-simpleRequest :: Maybe Proxy -> Url -> IO (Maybe String)
+simpleRequest :: Maybe Proxy -> Url -> ExceptT String IO String
 simpleRequest mbProxy url =
-  catchIO (liftM Just get)
-          (const (return Nothing))
+  liftIO get `catchError` (fail . show)
   where
     get :: IO String
     get = do
@@ -144,22 +148,30 @@ simpleRequest mbProxy url =
       return (rspBody res)
 
 
-parseDocument :: String -> Maybe Document
-parseDocument s =
-  case X.parseText def (T.pack s) of
-    Right d -> Just d
-    _       -> Nothing
+parseDocument :: Monad m => String -> ExceptT String m Document
+parseDocument = try . X.parseText def . T.pack
+  where
+    try = either (fail . show) return
 
 
 doSomeWork :: Options -> IO ExitCode
-doSomeWork o = do
-  let cfg = getConfig o
-  resp <- simpleRequest
-    (getProxy o)
-    (mkAPIUrl (fromMaybe "2121267" -- default city is Kazan'
-                         (cityID cfg))
-              (fromMaybe Celsiuses (tempUnits cfg)))
-  let weather = resp >>= parseDocument >>= getWeather
-  maybe (return $ ExitFailure 1)
-        ((>> return ExitSuccess) . putStrLn . renderWeather)
-        weather
+doSomeWork o =
+  let
+    cfg = getConfig o
+    req = simpleRequest
+          (getProxy o)
+          ( mkAPIUrl ( fromMaybe
+                       "2121267" -- default city is Kazan'
+                       (cityID cfg)
+                     )
+            (fromMaybe Celsiuses (tempUnits cfg))
+          )
+  in
+    runExceptT (req >>= parseDocument >>= getWeather) >>= \case
+      Left err -> do
+        putStrLn err
+        return $ ExitFailure 1
+
+      Right w -> do
+        putStrLn . renderWeather $ w
+        return ExitSuccess
