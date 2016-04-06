@@ -84,8 +84,8 @@ renderWeather w =
   [ unpack (getCity w)
   , unpack (getTemp w)
   , case getUnits w of
-    Celsiuses  -> "°C"
-    Farenheits -> "°F"
+       Celsiuses  -> "°C"
+       Farenheits -> "°F"
   , ", "
   , unpack (getText w)
   ]
